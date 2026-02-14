@@ -1,5 +1,5 @@
 from typing import List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from simulator.utils.llm_utils import set_llm_chain, set_callback
 from simulator.utils.parallelism import batch_invoke, async_batch_invoke
 from typing import Tuple
@@ -25,7 +25,21 @@ def policies_list_to_str(policies):
 
 class Rank(BaseModel):
     """The Rank"""
-    score: int = Field(description="The final score between 0-10")
+    model_config = ConfigDict(populate_by_name=True)
+    score: int = Field(
+        description="The final score between 0-10",
+        validation_alias='score',  # primary name
+    )
+
+    def __init__(self, **data):
+        # Normalize alternative field names that DeepSeek may return
+        aliases = ['likelihood_score', 'likelihood', 'ranking_score',
+                   'rank_score', 'difficulty_score', 'co_occurrence_score']
+        for alias in aliases:
+            if alias in data and 'score' not in data:
+                data['score'] = data.pop(alias)
+                break
+        super().__init__(**data)
 
 
 class FlowsList(BaseModel):
@@ -208,10 +222,16 @@ class DescriptionGenerator:
             all_edges.append((cur_sample['ind1'], cur_sample['ind2'], {'weight': result['result'].score}))
         self.total_cost += graph_creation_cost
         n_edges = len(all_edges)
-        avg_edge_weight = sum(edge[2]['weight'] for edge in all_edges) / n_edges
-        # Calculate standard deviation
-        std_edge_weight = math.sqrt(sum((edge[2]['weight'] - avg_edge_weight) ** 2 for edge in all_edges) / n_edges)
-        self.graph_info['G'].add_edges_from(all_edges)
+        if n_edges == 0:
+            logger = get_logger()
+            logger.warning(f"{ConsoleColor.WHITE}⚠️  No valid edges extracted from policy graph. "
+                           f"Total samples: {len(samples_batch)}, all failed.{ConsoleColor.RESET}")
+            avg_edge_weight = 0
+            std_edge_weight = 0
+        else:
+            avg_edge_weight = sum(edge[2]['weight'] for edge in all_edges) / n_edges
+            std_edge_weight = math.sqrt(sum((edge[2]['weight'] - avg_edge_weight) ** 2 for edge in all_edges) / n_edges)
+            self.graph_info['G'].add_edges_from(all_edges)
         track_event(GenerateRelationsGraphEvent(cost=graph_creation_cost,
                                                 n_edges=n_edges,
                                                 avg_edge_weight=avg_edge_weight,

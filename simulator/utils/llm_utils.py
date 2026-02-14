@@ -17,6 +17,10 @@ import pandas as pd
 
 LLM_ENV = yaml.safe_load(open('config/llm_env.yml', 'r'))
 
+# Ensure 'deepseek' key exists in LLM_ENV (falls back to 'openai' settings)
+if 'deepseek' not in LLM_ENV:
+    LLM_ENV['deepseek'] = LLM_ENV.get('openai', {})
+
 
 def get_prompt_template(args: dict) -> ChatPromptTemplate:
     if "prompt_hub_name" in args:
@@ -94,10 +98,43 @@ def set_llm_chain(llm: BaseChatModel, **kwargs) -> Runnable:
     Initialize a chain
     """
     system_prompt_template = get_prompt_template(kwargs)
+    is_deepseek = getattr(llm, '_is_deepseek', False)
+
     if "structure" in kwargs:
-        return system_prompt_template | llm.with_structured_output(kwargs["structure"])
+        if is_deepseek:
+            # DeepSeek only supports json_object mode, not json_schema.
+            # Also requires the word "json" in the prompt.
+            system_prompt_template = _inject_json_instruction(system_prompt_template)
+            return system_prompt_template | llm.with_structured_output(kwargs["structure"], method='json_mode')
+        else:
+            return system_prompt_template | llm.with_structured_output(kwargs["structure"])
     else:
         return system_prompt_template | llm
+
+
+def _inject_json_instruction(prompt_template: ChatPromptTemplate) -> ChatPromptTemplate:
+    """
+    Append 'Respond in valid JSON format.' to the system message in a prompt template.
+    DeepSeek's json_object mode requires the word 'json' somewhere in the prompt.
+    """
+    messages = prompt_template.messages
+    new_messages = []
+    injected = False
+    for msg in messages:
+        if hasattr(msg, 'prompt') and not injected:
+            # This is a SystemMessagePromptTemplate or similar
+            original_template = msg.prompt.template
+            if 'json' not in original_template.lower():
+                msg.prompt.template = original_template + "\n\nYou must respond in valid JSON format."
+            injected = True
+        new_messages.append(msg)
+    if not injected:
+        # No system message found — prepend one
+        from langchain_core.prompts import SystemMessagePromptTemplate
+        new_messages.insert(0, SystemMessagePromptTemplate.from_template(
+            "You must respond in valid JSON format."
+        ))
+    return ChatPromptTemplate(messages=new_messages, input_variables=prompt_template.input_variables)
 
 
 def load_tools(tools_path: str):
@@ -195,7 +232,7 @@ def get_dummy_callback():
 
 
 def set_callback(llm_type):
-    if llm_type.lower() == 'openai' or llm_type.lower() == 'azure':
+    if llm_type.lower() in ('openai', 'azure', 'deepseek'):
         callback = get_openai_callback
     elif llm_type.lower() == 'anthropic_bedrock':
         callback = get_bedrock_anthropic_callback
@@ -303,5 +340,25 @@ def get_llm(config: dict, timeout=60):
             device=device,
             device_map=device_map
         )
+
+    elif config['type'].lower() == 'deepseek':
+        # DeepSeek uses OpenAI-compatible API with different base URL.
+        # Tagged with _is_deepseek so set_llm_chain can use json_mode
+        # instead of json_schema for structured output.
+        api_key = config.get('openai_api_key',
+                             LLM_ENV['deepseek'].get('DEEPSEEK_API_KEY',
+                                                      LLM_ENV['deepseek'].get('OPENAI_API_KEY', '')))
+        base_url = config.get('openai_api_base', 'https://api.deepseek.com/v1')
+        llm = ChatOpenAI(
+            temperature=temperature,
+            model_name=config['name'],
+            openai_api_key=api_key,
+            openai_api_base=base_url,
+            model_kwargs=model_kwargs,
+            timeout=timeout,
+        )
+        llm._is_deepseek = True
+        return llm
+
     else:
         raise NotImplementedError("LLM not implemented")
