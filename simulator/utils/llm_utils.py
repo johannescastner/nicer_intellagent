@@ -345,9 +345,19 @@ def get_llm(config: dict, timeout=60):
         # DeepSeek uses OpenAI-compatible API with different base URL.
         # Tagged with _is_deepseek so set_llm_chain can use json_mode
         # instead of json_schema for structured output.
-        api_key = config.get('openai_api_key',
-                             LLM_ENV['deepseek'].get('DEEPSEEK_API_KEY',
-                                                      LLM_ENV['deepseek'].get('OPENAI_API_KEY', '')))
+        api_key = (
+            config.get('openai_api_key')
+            or LLM_ENV.get('deepseek', {}).get('DEEPSEEK_API_KEY')
+            or LLM_ENV.get('deepseek', {}).get('OPENAI_API_KEY')
+            or os.environ.get('DEEPSEEK_API_KEY')
+            or os.environ.get('OPENAI_API_KEY')
+            or LLM_ENV.get('openai', {}).get('OPENAI_API_KEY')
+        )
+        if not api_key:
+            raise ValueError(
+                "DeepSeek API key not found. Set DEEPSEEK_API_KEY env var, "
+                "or add deepseek.DEEPSEEK_API_KEY to config/llm_env.yml"
+            )
         base_url = config.get('openai_api_base', 'https://api.deepseek.com/v1')
         llm = ChatOpenAI(
             temperature=temperature,
