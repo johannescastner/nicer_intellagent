@@ -33,8 +33,9 @@ class Rank(BaseModel):
 
     def __init__(self, **data):
         # Normalize alternative field names that DeepSeek may return
-        aliases = ['likelihood_score', 'likelihood', 'ranking_score',
-                   'rank_score', 'difficulty_score', 'co_occurrence_score']
+        aliases = ['likelihood_score', 'likelihood', 'likelihood_rank',
+                   'ranking_score', 'rank_score', 'difficulty_score',
+                   'co_occurrence_score']
         for alias in aliases:
             if alias in data and 'score' not in data:
                 data['score'] = data.pop(alias)
