@@ -28,14 +28,18 @@ class Rank(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     score: int = Field(
         description="The final score between 0-10",
-        validation_alias='score',  # primary name
     )
 
     def __init__(self, **data):
-        # Normalize alternative field names that DeepSeek may return
-        aliases = ['likelihood_score', 'likelihood', 'likelihood_rank',
-                   'ranking_score', 'rank_score', 'difficulty_score',
-                   'co_occurrence_score']
+        # Normalize field names that DeepSeek actually returns (verified from logs)
+        aliases = [
+            'relevance_likelihood',        # most common
+            'relevance_likelihood_score',   # second most common
+            'relevance_likelihood_rank',    # observed
+            'likelihood_both_relevant',     # observed
+            'likelihood_rank',             # observed in earlier runs
+            'likelihood_score',            # observed in earlier runs
+        ]
         for alias in aliases:
             if alias in data and 'score' not in data:
                 data['score'] = data.pop(alias)
@@ -61,8 +65,17 @@ class PoliciesList(BaseModel):
 
 
 class EventDescription(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     event_description: str = Field(description="The event description")
     expected_behaviour: str = Field(description="The expected behaviour of the chatbot according to the policies")
+
+    def __init__(self, **data):
+        # Normalize field names that DeepSeek actually returns (verified from logs)
+        if 'scenario' in data and 'event_description' not in data:
+            data['event_description'] = data.pop('scenario')
+        if 'expected_behavior' in data and 'expected_behaviour' not in data:
+            data['expected_behaviour'] = data.pop('expected_behavior')
+        super().__init__(**data)
 
 
 @dataclass
