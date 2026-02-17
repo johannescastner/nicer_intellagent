@@ -2,10 +2,15 @@ from simulator.utils.logger_config import get_logger, ConsoleColor
 from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 import contextlib
+import time
 from tqdm import trange, tqdm
 import concurrent.futures
 import asyncio
 from simulator.healthcare_analytics import ExceptionEvent, track_event
+
+# Retry configuration for transient LLM failures (e.g. JSON parse errors)
+MAX_RETRIES = 3
+RETRY_BASE_WAIT = 2  # seconds — exponential: 2s, 4s, 8s
 
 
 def batch_invoke(llm_function, inputs: list[Any], num_workers: int, callbacks: list[BaseCallbackHandler]) -> list[Any]:
@@ -29,7 +34,23 @@ def batch_invoke(llm_function, inputs: list[Any], num_workers: int, callbacks: l
         with contextlib.ExitStack() as stack:
             CB = [stack.enter_context(callback()) for callback in callbacks]
             try:
-                result = llm_function(sample)
+                result = None
+                last_err = None
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        result = llm_function(sample)
+                        break
+                    except Exception as e:
+                        last_err = e
+                        if attempt < MAX_RETRIES - 1:
+                            wait = RETRY_BASE_WAIT ** (attempt + 1)
+                            logger.warning(
+                                'Retry %d/%d after error: %s (waiting %ds)',
+                                attempt + 1, MAX_RETRIES, e, wait,
+                            )
+                            time.sleep(wait)
+                if result is None and last_err is not None:
+                    raise last_err
             except Exception as e:
                 logger.error('Error in chain invoke: {}'.format(e))
                 result = None
@@ -71,7 +92,23 @@ async def batch_ainvoke(llm_async_function, inputs: list[Any], num_workers: int,
         with contextlib.ExitStack() as stack:
             CB = [stack.enter_context(callback()) for callback in callbacks]
             try:
-                result = await llm_async_function(sample)
+                result = None
+                last_err = None
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        result = await llm_async_function(sample)
+                        break
+                    except Exception as e:
+                        last_err = e
+                        if attempt < MAX_RETRIES - 1:
+                            wait = RETRY_BASE_WAIT ** (attempt + 1)
+                            logger.warning(
+                                'Retry %d/%d after error: %s (waiting %ds)',
+                                attempt + 1, MAX_RETRIES, e, wait,
+                            )
+                            await asyncio.sleep(wait)
+                if result is None and last_err is not None:
+                    raise last_err
             except Exception as e:
                 logger.error('Error in chain invoke: {}'.format(e))
                 result = None
