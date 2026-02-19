@@ -102,10 +102,10 @@ def set_llm_chain(llm: BaseChatModel, **kwargs) -> Runnable:
 
     if "structure" in kwargs:
         if is_deepseek:
-            # DeepSeek only supports json_object mode, not json_schema.
-            # Also requires the word "json" in the prompt.
-            system_prompt_template = _inject_json_instruction(system_prompt_template)
-            return system_prompt_template | llm.with_structured_output(kwargs["structure"], method='json_mode')
+            # DeepSeek: use function_calling so the Pydantic schema is sent
+            # as a tool definition — the model sees exact field names.
+            # json_mode does NOT send field names, causing paraphrasing.
+            return system_prompt_template | llm.with_structured_output(kwargs["structure"], method='function_calling')
         else:
             return system_prompt_template | llm.with_structured_output(kwargs["structure"])
     else:
@@ -358,7 +358,7 @@ def get_llm(config: dict, timeout=60):
                 "DeepSeek API key not found. Set DEEPSEEK_API_KEY env var, "
                 "or add deepseek.DEEPSEEK_API_KEY to config/llm_env.yml"
             )
-        base_url = config.get('openai_api_base', 'https://api.deepseek.com/v1')
+        base_url = config.get('openai_api_base', 'https://api.deepseek.com/beta')
         llm = ChatOpenAI(
             temperature=temperature,
             model_name=config['name'],
