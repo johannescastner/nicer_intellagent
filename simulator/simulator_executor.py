@@ -59,6 +59,12 @@ class SimulatorExecutor:
         self.output_path = output_path
         self.simulator_results = None
 
+        # ── Optional callback for real-time result streaming ──────────
+        # Set this to a callable(batch_results, batch_index, records) to
+        # receive results after each mini-batch completes. This enables
+        # real-time GCS streaming without modifying the simulation loop.
+        self.on_batch_complete = None
+
     @staticmethod
     def generate_run_id():
         """Generate a unique random Run ID."""
@@ -131,11 +137,18 @@ class SimulatorExecutor:
                     f"Stopping the simulation.{ConsoleColor.RESET}")
                 break
             logger.info(f"{ConsoleColor.WHITE}Running batch {i}...{ConsoleColor.RESET}")
-            res, cost = self.dialog_manager.run_events(records[i * mini_batch_size:
-                                                               (i + 1) * mini_batch_size])
+            batch_records = records[i * mini_batch_size:(i + 1) * mini_batch_size]
+            res, cost = self.dialog_manager.run_events(batch_records)
             all_res.extend(res)
             total_cost += cost
             pickle.dump((all_res, i + 1, total_cost), open(intermediate_res, 'wb'))
+
+            # ── Real-time streaming callback ──────────────────────────
+            if self.on_batch_complete is not None:
+                try:
+                    self.on_batch_complete(res, i, batch_records)
+                except Exception as e:
+                    logger.warning(f"on_batch_complete callback error: {e}")
 
         # Handle remaining records if any
         remaining_records = records[num_batch * mini_batch_size:]
@@ -145,6 +158,13 @@ class SimulatorExecutor:
                 res, cost = self.dialog_manager.run_events(remaining_records)
                 all_res.extend(res)
                 total_cost += cost
+
+                # ── Real-time streaming callback (remainder batch) ────
+                if self.on_batch_complete is not None:
+                    try:
+                        self.on_batch_complete(res, num_batch, remaining_records)
+                    except Exception as e:
+                        logger.warning(f"on_batch_complete callback error: {e}")
             else:
                 logger.warning(
                     f"{ConsoleColor.RED}The cost limit for the experiment is reached. "
