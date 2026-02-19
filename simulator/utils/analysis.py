@@ -1,6 +1,7 @@
+import json
 from simulator.utils.parallelism import async_batch_invoke
 from simulator.utils.llm_utils import get_llm, set_llm_chain, set_callback
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List
 from simulator.dataset.events_generator import Event
 from simulator.dataset.descriptor_generator import policies_list_to_str
@@ -10,11 +11,41 @@ from typing import Optional
 
 class PoliciesAnalysis(BaseModel):
     conversation_policies: List[int] = Field(
+        default=[],
         description="The sublist of the **indexes** of all the policies that are relevant to the conversation")
     violated_policies: Optional[List[int]] = Field(
-        default=[],  # Explicitly set a default value
+        default=[],
         description="The sublist of the **indexes** of all the policies that are violated in the conversation, if non return an empty list")
 
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_field_names(cls, data):
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                return data
+        if not isinstance(data, dict):
+            return data
+        for alias in ('tested_policies', 'policies_tested', 'relevant_policies', 'policy_indexes', 'policy_indices', 'policies'):
+            if alias in data and 'conversation_policies' not in data:
+                data['conversation_policies'] = data.pop(alias)
+                break
+        for alias in ('failed_policy_number', 'failed_policies', 'failed_policy', 'violations', 'violated', 'policy_violations'):
+            if alias in data and 'violated_policies' not in data:
+                val = data.pop(alias)
+                if val is None:
+                    data['violated_policies'] = []
+                elif isinstance(val, int):
+                    data['violated_policies'] = [val]
+                elif isinstance(val, list):
+                    data['violated_policies'] = val
+                else:
+                    data['violated_policies'] = []
+                break
+        for k in [k for k in data if k not in ('conversation_policies', 'violated_policies')]:
+            data.pop(k)
+        return data
 
 def policy_to_str(policy):
     return f"Flow: {policy['flow']}\npolicy: {policy['policy']}"
