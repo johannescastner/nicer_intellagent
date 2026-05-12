@@ -119,7 +119,22 @@ class Dialog:
                 if message.type == 'tool':
                     all_tool_calls[message.tool_call_id]['output'] = message.content
             for v in all_tool_calls.values():
-                self.memory.insert_tool(state['thread_id'], v['name'], json.dumps(v['args']), v['output'])
+                # Bug O fix (2026-05-12): ``output`` is only set on a
+                # tool_call dict when a matching ToolMessage is emitted
+                # (loop above, line ~120). When the chatbot calls a
+                # terminal-primitive tool that triggers ``interrupt()``
+                # (e.g. ``ask_human``), the graph pauses BEFORE the
+                # matching ToolMessage exists. Direct ``v['output']``
+                # subscript then raised ``KeyError('output')``, caught
+                # by ``simulator/utils/parallelism.py:34/76`` as
+                # ``Error in chain invoke: 'output'``, retried 3×, then
+                # dropped the sample. The downstream
+                # ``SqliteSaver.insert_tool(..., output: Optional[str])``
+                # explicitly accepts ``None`` (SQLite stores NULL),
+                # which is the principled "pending tool_call" semantic.
+                # ``dict.get('output')`` returns ``None`` for missing
+                # keys — matches the typed contract exactly.
+                self.memory.insert_tool(state['thread_id'], v['name'], json.dumps(v['args']), v.get('output'))
                 time.sleep(0.001)
             # inserting the chatbot messages into memory
             self.memory.insert_dialog(state['thread_id'], 'AI', response['messages'][-1].content)
